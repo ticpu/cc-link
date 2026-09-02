@@ -1,0 +1,31 @@
+# Maintainer: Jérôme Poulin <jeromepoulin@gmail.com>
+# Template. The Makefile fills in the version and writes PKGBUILD; `make archpkg-install` is the
+# whole procedure. A committed PKGBUILD would be rewritten by makepkg on every build and leave the
+# tree dirty, and a pkgver() function is what makes it do that.
+
+pkgname=cc-link
+pkgver=@PKGVER@
+pkgrel=1
+pkgdesc='Bridge Claude Code cross-session messaging between two machines over SSH'
+arch=('x86_64' 'aarch64')
+url='https://github.com/ticpu/cc-link'
+license=('GPL-3.0-only')
+depends=('gcc-libs' 'openssh')
+makedepends=('cargo')
+options=('!lto')
+
+build() {
+	cd "$startdir"
+	cargo build --release --bin cc-link
+}
+
+check() {
+	cd "$startdir"
+	cargo test --release
+}
+
+package() {
+	install -Dm755 "$startdir/target/release/cc-link" "$pkgdir/usr/bin/cc-link"
+	install -Dm644 "$startdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+	install -Dm644 "$startdir/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

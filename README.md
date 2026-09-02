@@ -32,8 +32,9 @@ without a prompt (`BatchMode=yes` is always set; an ssh agent or a key is on you
 `make deb` builds `cc-link_<version>_amd64.deb` and `cc-link_<version>_arm64.deb` in one container
 pass, against an older glibc than the machines they install on.
 
-`makepkg -si` from the repository root builds and installs the working tree on Arch. It takes the
-version from `Cargo.toml`, so there is nothing to bump in two places.
+`make archpkg-install` builds and installs the working tree on Arch, and `make archpkg` stops at the
+package. Both generate the PKGBUILD from `PKGBUILD.in` with the same version the `.deb` carries, so
+there is nothing to bump anywhere but `Cargo.toml`.
 
 ## Use from a session
 

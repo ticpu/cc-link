@@ -7,13 +7,15 @@ GIT_TAG := $(shell git describe --exact-match --tags 2>/dev/null | grep -E '^v')
 GIT_VERSION := $(shell git log --oneline . | wc -l)-$(shell git rev-parse --short HEAD)
 BASE_VERSION := $(if $(GIT_DIRTY),$(VERSION)+$(GIT_VERSION),$(if $(GIT_TAG),$(VERSION),$(VERSION)+$(GIT_VERSION)))
 DEB_VERSION := $(patsubst v%,%,$(BASE_VERSION))
+# Same version, in the one shape pacman accepts: no hyphens, that separator is pkgrel's.
+ARCH_VERSION := $(subst -,.,$(DEB_VERSION))
 DEB_AMD64 := $(NAME)_$(DEB_VERSION)_amd64.deb
 DEB_ARM64 := $(NAME)_$(DEB_VERSION)_arm64.deb
 BINARIES := dist/$(BINARY).amd64 dist/$(BINARY).arm64
 FLOORS := dist/glibc-floor.amd64 dist/glibc-floor.arm64
 PKG := package.tmp
 
-.PHONY: all clean binaries deb deb-amd64 deb-arm64
+.PHONY: all clean binaries deb deb-amd64 deb-arm64 archpkg archpkg-install
 
 all: binaries
 
@@ -48,5 +50,16 @@ $(DEB_ARM64): dist/$(BINARY).arm64 dist/glibc-floor.arm64 DEBIAN/control
 $(BINARIES) $(FLOORS) &: build.sh Containerfile Cargo.toml $(wildcard Cargo.lock) $(wildcard src/*)
 	./build.sh
 
+PKGBUILD: PKGBUILD.in Cargo.toml
+	sed -e 's/@PKGVER@/$(ARCH_VERSION)/' PKGBUILD.in > $@
+
+archpkg: PKGBUILD
+	makepkg -f
+
+# -f because the version only moves with a commit: without it makepkg would find the package of a
+# dirty tree already built and install that instead of what is in front of it.
+archpkg-install: PKGBUILD
+	makepkg -sif
+
 clean:
-	rm -rf "$(PKG)" dist *.deb
+	rm -rf "$(PKG)" dist *.deb PKGBUILD *.pkg.tar.zst
