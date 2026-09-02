@@ -16,6 +16,11 @@ own pid, and relays messages between that mirror's socket and the real session's
 is prefixed with the host (`p4~claude-code-9e`) because it is the only address that survives the
 crossing.
 
+Address a mirrored session by its prefixed name. The bare name does not resolve from the other
+machine — each end computes a different short reference for the same session, so the prefixed name
+is the only address that survives the crossing. Re-read it from the peer list rather than reusing
+one from an earlier turn.
+
 The link ends when either exported session ends, when the SSH connection drops, or on `detach`.
 Nothing reconnects by itself.
 

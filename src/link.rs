@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::frame;
 use crate::mux::{self, Control, Intent, Mux, Stream};
@@ -130,7 +130,7 @@ pub async fn server_handshake(mux: &mut Mux, paths: &Paths) -> Result<Option<(Ag
             },
         )
         .await?;
-        bail!(reason);
+        return Err(refused(&mut control, reason).await);
     }
 
     match intent {
@@ -159,7 +159,7 @@ pub async fn server_handshake(mux: &mut Mux, paths: &Paths) -> Result<Option<(Ag
                         },
                     )
                     .await?;
-                    bail!(reason);
+                    return Err(refused(&mut control, reason).await);
                 }
             };
             let remote_export =
@@ -215,6 +215,16 @@ fn acceptable(protocol: u32, platform: &str, pid_domain: &str, home: &str) -> Re
         );
     }
     Ok(())
+}
+
+/// Report a refusal and leave.
+///
+/// Exiting straight after writing the refusal loses it: the message is in the multiplexer, not yet
+/// in the pipe, and the client sees only a closed link — the reason it needs is exactly the thing
+/// that goes missing. Wait for the client to read it, then fail with the same words it was told.
+async fn refused(control: &mut Stream, reason: String) -> anyhow::Error {
+    let _ = tokio::time::timeout(LIST_DRAIN, drain(control)).await;
+    anyhow!(reason)
 }
 
 /// Read a stream until the other end closes it.
@@ -296,9 +306,14 @@ impl Link {
         let key = registry::synth_key(&registry::read_key(&paths, &export)?, &identity)?;
         registry::publish(&paths, &identity, &record, &key)?;
         info!(
+            host = identity.host,
+            mirrors = record["name"].as_str(),
+            exports = identity.exports,
+            remote_pid = agreement
+                .remote_export
+                .pid(),
             socket = %identity.socket_path.display(),
-            name = record["name"].as_str(),
-            "mirroring remote session"
+            "link open"
         );
         Ok((
             Self {
@@ -339,6 +354,7 @@ impl Link {
                     let (conn, _) = accepted.context("accepting on the mirror socket")?;
                     let mux_stream = self.mux.open().await?;
                     let socket = self.identity.socket_path.clone();
+                    debug!(host = self.identity.host, "carrying a local connection to the far end");
                     tokio::spawn(async move {
                         if let Err(e) = pump(conn, mux_stream, socket).await {
                             warn!(error = %e, "a relayed connection ended badly");
@@ -353,6 +369,13 @@ impl Link {
                                 .socket_path()
                                 .ok_or_else(|| anyhow!("the exported session has no socket"))?;
                             let ours = self.identity.socket_path.clone();
+                            debug!(
+                                host = self.identity.host,
+                                session = self
+                                    .export
+                                    .name(),
+                                "delivering a connection from the far end"
+                            );
                             tokio::spawn(async move {
                                 if let Err(e) = deliver(stream, socket, ours).await {
                                     warn!(error = %e, "a relayed connection ended badly");
@@ -406,7 +429,13 @@ impl Link {
             },
         )
         .await;
-        info!(reason, "link ended");
+        info!(
+            reason,
+            host = self
+                .identity
+                .host,
+            "link ended"
+        );
         Ok(())
     }
 

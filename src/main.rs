@@ -90,7 +90,17 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_logging();
 
-    match cli.command {
+    // Whatever fails, it fails in the journal too. A relay is started by a supervisor or by ssh,
+    // and in neither case is there a terminal for the message anyone will look for later.
+    let outcome = run(cli.command).await;
+    if let Err(e) = &outcome {
+        tracing::error!(error = format!("{e:#}"), "cc-link failed");
+    }
+    outcome
+}
+
+async fn run(command: Command) -> Result<()> {
+    match command {
         Command::Connect {
             host,
             session,

@@ -54,19 +54,20 @@ pub struct ControlPlane {
     tool_router: ToolRouter<Self>,
     links: Arc<Mutex<HashMap<String, Child>>>,
     paths: Paths,
-    /// Session that spawned this server, and the one every link exports.
-    session: Record,
 }
 
 #[tool_router(router = tool_router)]
 impl ControlPlane {
-    /// Build a supervisor for the session that spawned this process.
-    pub fn new(paths: Paths, session: Record) -> Self {
+    /// Build a supervisor.
+    ///
+    /// Which session it exports is not decided here: a health check spawns this server with no
+    /// session as its parent, and refusing to start would report a working install as broken. The
+    /// question is only answerable — and only worth answering — when a link is asked for.
+    pub fn new(paths: Paths) -> Self {
         Self {
             tool_router: Self::tool_router(),
             links: Arc::new(Mutex::new(HashMap::new())),
             paths,
-            session,
         }
     }
 
@@ -135,8 +136,7 @@ impl ControlPlane {
         if links.contains_key(host) {
             return Err(anyhow!("already linked to {host}; detach first"));
         }
-        let pid = self
-            .session
+        let pid = parent_session(&self.paths)?
             .pid()
             .ok_or_else(|| anyhow!("the session that spawned cc-link has no pid"))?;
         let exe = std::env::current_exe().context("locating cc-link")?;
@@ -300,7 +300,7 @@ fn parent_session(paths: &Paths) -> Result<Record> {
 /// Run the control plane on stdio until the session ends.
 pub async fn run() -> Result<()> {
     let paths = Paths::from_env()?;
-    let control = ControlPlane::new(paths.clone(), parent_session(&paths)?);
+    let control = ControlPlane::new(paths);
     let service = control
         .clone()
         .serve(rmcp::transport::stdio())
