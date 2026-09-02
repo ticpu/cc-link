@@ -32,6 +32,8 @@ pub struct Link {
 
 /// Result of a handshake: what the far end exports, and how far its clock is from ours.
 pub struct Agreement {
+    /// Name the far end knows itself by, which prefixes the mirrored session's name.
+    pub peer_host: String,
     /// Record of the session the far end exports.
     pub remote_export: Record,
     /// Milliseconds between the two clocks.
@@ -62,9 +64,14 @@ pub async fn client_handshake(mux: &Mux, export: &Record, session: &str) -> Resu
     )
     .await?;
     match mux::recv(&mut control).await? {
-        Control::Ready { export, clock_ms } => {
+        Control::Ready {
+            export,
+            clock_ms,
+            host,
+        } => {
             let offset = clock_offset(sent_at, clock_ms);
             Ok(Agreement {
+                peer_host: host,
                 remote_export: Record(export),
                 clock_offset_ms: offset,
                 control,
@@ -93,7 +100,7 @@ pub async fn client_list(mux: &Mux) -> Result<Vec<Value>> {
 ///
 /// The session exported here is the one the client named. Falling back to whatever session happens
 /// to be running would hand an arbitrary user's permissions across the boundary.
-pub async fn server_handshake(mux: &mut Mux, paths: &Paths) -> Result<Option<Agreement>> {
+pub async fn server_handshake(mux: &mut Mux, paths: &Paths) -> Result<Option<(Agreement, Record)>> {
     let mut control = mux
         .accept()
         .await
@@ -103,6 +110,7 @@ pub async fn server_handshake(mux: &mut Mux, paths: &Paths) -> Result<Option<Agr
         platform,
         pid_domain,
         home,
+        host,
         clock_ms,
         intent,
         export,
@@ -157,14 +165,19 @@ pub async fn server_handshake(mux: &mut Mux, paths: &Paths) -> Result<Option<Agr
                         .0
                         .clone(),
                     clock_ms: registry::now_ms(),
+                    host: local_host(),
                 },
             )
             .await?;
-            Ok(Some(Agreement {
-                remote_export: Record(remote_export),
-                clock_offset_ms: clock_offset(sent_at, clock_ms),
-                control,
-            }))
+            Ok(Some((
+                Agreement {
+                    peer_host: host,
+                    remote_export: Record(remote_export),
+                    clock_offset_ms: clock_offset(sent_at, clock_ms),
+                    control,
+                },
+                local,
+            )))
         }
     }
 }
@@ -197,12 +210,23 @@ fn acceptable(protocol: u32, platform: &str, pid_domain: &str, home: &str) -> Re
     Ok(())
 }
 
+/// Name this machine knows itself by. Only ever a display prefix.
+fn local_host() -> String {
+    nix::unistd::gethostname()
+        .map(|h| {
+            h.to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_else(|_| "peer".into())
+}
+
 fn hello(intent: Intent, export: Option<Value>) -> Result<Control> {
     Ok(Control::Hello {
         protocol: mux::CONTROL_PROTOCOL,
         platform: "linux".into(),
         pid_domain: registry::local_pid_domain()?,
         home: std::env::var("HOME").unwrap_or_default(),
+        host: local_host(),
         clock_ms: registry::now_ms(),
         intent,
         export,
@@ -235,16 +259,10 @@ impl Link {
             host,
             clock_offset_ms: agreement.clock_offset_ms,
         };
-        let template = registry::resolve_exportable_session(&paths, None).or_else(|_| {
-            registry::resolve_exportable_session(
-                &paths,
-                export
-                    .name()
-                    .as_deref(),
-            )
-        })?;
-        let record = registry::synth_record(&template, &agreement.remote_export, &identity)?;
-        let key = registry::synth_key(&registry::read_key(&paths, &template)?, &identity)?;
+        // The exported session is itself a live local record, so it is the template: the mirror
+        // then has whatever shape this build of Claude Code writes, with no field list to keep.
+        let record = registry::synth_record(&export, &agreement.remote_export, &identity)?;
+        let key = registry::synth_key(&registry::read_key(&paths, &export)?, &identity)?;
         registry::publish(&paths, &identity, &record, &key)?;
         info!(
             socket = %identity.socket_path.display(),
@@ -314,8 +332,12 @@ impl Link {
                     }
                 }
                 read = control_read.read_line(&mut control_line) => {
-                    if read.context("reading control")? == 0 {
-                        break "the far end closed the control stream".to_string();
+                    // A closed control stream is how the other end says it is done, whether it
+                    // closed cleanly or its process went away; it is the normal exit, not a fault.
+                    match read {
+                        Ok(0) => break "the far end closed the control stream".to_string(),
+                        Ok(_) => {}
+                        Err(e) => break format!("the control stream ended: {e}"),
                     }
                     match serde_json::from_str::<Control>(&control_line)? {
                         Control::Update { record } => self.mirror_update(&record)?,
@@ -327,7 +349,9 @@ impl Link {
                     tokio::time::sleep(WATCH_DEBOUNCE).await;
                     match registry::validate_target(&self.paths, &self.export) {
                         Ok(current) => {
-                            mux::send(&mut control_write, &Control::Update { record: current.0 }).await?;
+                            if let Err(e) = mux::send(&mut control_write, &Control::Update { record: current.0 }).await {
+                                break format!("the control stream ended: {e}");
+                            }
                         }
                         Err(e) => break format!("the exported session is gone: {e}"),
                     }
@@ -357,11 +381,8 @@ impl Link {
 
     /// Rewrite the mirrored record when the far session's own changes.
     fn mirror_update(&self, remote: &Value) -> Result<()> {
-        let template = registry::resolve_exportable_session(&self.paths, None)?;
-        let record = registry::synth_record(&template, &Record(remote.clone()), &self.identity)?;
-        let key =
-            registry::synth_key(&registry::read_key(&self.paths, &template)?, &self.identity)?;
-        registry::publish(&self.paths, &self.identity, &record, &key)
+        let record = registry::synth_record(&self.export, &Record(remote.clone()), &self.identity)?;
+        registry::write_record(&self.paths, &self.identity, &record)
     }
 }
 
@@ -370,6 +391,11 @@ impl Link {
 /// A path left behind by a dead process is unlinked, but only once it refuses a connection: pids
 /// are reused, and the socket at that path may belong to a session that is very much alive.
 fn bind(path: &PathBuf) -> Result<UnixListener> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .with_context(|| format!("setting mode on {}", dir.display()))?;
+    }
     match UnixListener::bind(path) {
         Ok(listener) => return Ok(listener),
         Err(e) if e.kind() != std::io::ErrorKind::AddrInUse => {

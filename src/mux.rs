@@ -53,6 +53,8 @@ pub enum Control {
         pid_domain: String,
         /// Home directory of the account the sender runs as.
         home: String,
+        /// Name the sender knows this machine by, which prefixes the mirrored session's name.
+        host: String,
         /// Sender's wall clock, so timestamps can be translated.
         clock_ms: u64,
         /// What the sender wants.
@@ -71,6 +73,8 @@ pub enum Control {
         export: Value,
         /// Far end's wall clock.
         clock_ms: u64,
+        /// Name the far end knows itself by.
+        host: String,
     },
     /// Exported session's record changed.
     Update {
@@ -353,6 +357,7 @@ mod tests {
             platform: "linux".into(),
             pid_domain: "linux:a:pid:[1]".into(),
             home: "/home/x".into(),
+            host: "p4".into(),
             clock_ms: 1,
             intent: Intent::Attach {
                 session: "claude-code-zz".into(),

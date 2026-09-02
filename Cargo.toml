@@ -19,7 +19,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 hex = "0.4"
-nix = { version = "0.31", features = ["process", "signal", "socket", "user"] }
+nix = { version = "0.31", features = ["hostname", "process", "signal", "socket", "user"] }
 notify = "8"
 rand = "0.9"
 rmcp = { version = "3", features = ["server", "transport-io", "macros"] }

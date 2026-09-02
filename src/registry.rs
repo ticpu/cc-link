@@ -70,28 +70,24 @@ impl Paths {
             .join(".claude/sessions")
     }
 
-    /// Directory holding session sockets. Falls back to the `/tmp` form only when the resulting
-    /// socket path would not fit in a unix socket address, which is the condition Claude Code uses.
-    pub fn sock_dir(&self) -> PathBuf {
+    /// Socket a session with this pid binds.
+    ///
+    /// Falls back to the `/tmp` form only when this particular path would not fit in a unix socket
+    /// address, which is the condition Claude Code uses — not a blanket judgement on the directory.
+    pub fn socket_path(&self, pid: u32) -> PathBuf {
         let primary = self
             .runtime
-            .join("cc-socks");
-        let longest = primary.join(format!("{}.sock", u32::MAX));
-        if longest
+            .join("cc-socks")
+            .join(format!("{pid}.sock"));
+        if primary
             .as_os_str()
             .len()
             > SUN_PATH_MAX
         {
-            PathBuf::from(format!("/tmp/cc-socks-{}", self.uid))
+            PathBuf::from(format!("/tmp/cc-socks-{}/{pid}.sock", self.uid))
         } else {
             primary
         }
-    }
-
-    /// Socket a session with this pid binds.
-    pub fn socket_path(&self, pid: u32) -> PathBuf {
-        self.sock_dir()
-            .join(format!("{pid}.sock"))
     }
 
     /// Record for a pid.
@@ -593,16 +589,23 @@ pub fn read_key(paths: &Paths, record: &Record) -> Result<Value> {
     serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
-/// Write a mirrored record and its key file.
-pub fn publish(paths: &Paths, local: &LocalIdentity, record: &Value, key: &Value) -> Result<()> {
+/// Write a mirrored record, leaving its key file alone.
+///
+/// The key is written once and left: regenerating its token on every status change would churn a
+/// file the far session may be reading.
+pub fn write_record(paths: &Paths, local: &LocalIdentity, record: &Value) -> Result<()> {
     let dir = paths.sessions_dir();
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
         .with_context(|| format!("setting mode on {}", dir.display()))?;
-
     let record_path = paths.record_path(local.pid);
     fs::write(&record_path, serde_json::to_vec_pretty(record)?)
-        .with_context(|| format!("writing {}", record_path.display()))?;
+        .with_context(|| format!("writing {}", record_path.display()))
+}
+
+/// Write a mirrored record and its key file.
+pub fn publish(paths: &Paths, local: &LocalIdentity, record: &Value, key: &Value) -> Result<()> {
+    write_record(paths, local, record)?;
 
     let key_path = paths.key_path(local.pid, &local.socket_path);
     fs::write(&key_path, serde_json::to_vec_pretty(key)?)

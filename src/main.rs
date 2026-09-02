@@ -161,11 +161,12 @@ async fn serve() -> Result<()> {
     let paths = Paths::from_env()?;
     let io = join(tokio::io::stdin(), tokio::io::stdout());
     let mut mux = mux::start(io, false).await?;
-    let Some(agreement) = link::server_handshake(&mut mux, &paths).await? else {
+    let Some((agreement, export)) = link::server_handshake(&mut mux, &paths).await? else {
         return Ok(());
     };
-    let export = registry::resolve_exportable_session(&paths, None)?;
-    let host = "peer".to_owned();
+    let host = agreement
+        .peer_host
+        .clone();
     let (link, control) = link::Link::establish(paths, host, export, agreement, mux).await?;
     link.run(control)
         .await
