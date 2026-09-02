@@ -54,6 +54,7 @@ cc-link connect p4 --session claude-code-9e
 cc-link down [p4]
 ```
 
-`connect` runs in the foreground for as long as the link lasts. `down` is for mirrors left behind
-when no session is running; a mirror whose relay has died is collected by Claude Code's own sweeper
-without help.
+`connect` runs in the foreground for as long as the link lasts, and `down` is how you end it — it
+signals the relay, which withdraws its mirror before exiting. Never kill a relay by hand when `down`
+will do it. A relay that dies anyway leaves nothing behind for long: its mirror carries a dead pid
+in the local domain, which is exactly what Claude Code's own sweeper collects.

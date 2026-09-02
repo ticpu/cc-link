@@ -65,7 +65,8 @@ enum Command {
     },
     /// The far end of a link. Speaks the protocol on stdio and is not run by hand.
     Serve,
-    /// Tear down mirrors left behind when no session is running.
+    /// End a link, withdrawing the mirrored session. Also clears mirrors left by a relay that is
+    /// no longer running.
     Down {
         /// Only mirrors of this host.
         host: Option<String>,
