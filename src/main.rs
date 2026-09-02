@@ -12,7 +12,9 @@ mod registry;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use tokio::io::join;
-use tracing::info;
+use tracing::{info, warn};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 use crate::registry::{Paths, Record};
@@ -84,13 +86,7 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    // stdout carries the protocol on both the serve and mcp paths, so diagnostics never go there.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    init_logging();
 
     match cli.command {
         Command::Connect {
@@ -124,6 +120,35 @@ async fn main() -> Result<()> {
             local_session,
         } => down(host, session, local_session),
         Command::Mcp => mcp::run().await,
+    }
+}
+
+/// Send diagnostics to the journal, or to stderr where there is no journal.
+///
+/// Nothing may ever write to stdout: it carries the MCP protocol under `mcp` and the multiplexer
+/// under `serve`. A stray print corrupts the stream, and under `serve` it corrupts it exactly the
+/// way a chatty login shell does, which sends the reader hunting the wrong bug.
+///
+/// Structured fields are the reason this is a journal and not a file — an event carrying a field
+/// list stays queryable by value rather than by substring.
+fn init_logging() {
+    let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    match tracing_journald::layer() {
+        Ok(journal) => {
+            tracing_subscriber::registry()
+                .with(filter())
+                .with(journal.with_syslog_identifier("cc-link".into()))
+                .init();
+        }
+        // A container or a host without systemd has no journal socket, and the far end of a link
+        // is whatever machine the user has.
+        Err(e) => {
+            tracing_subscriber::fmt()
+                .with_env_filter(filter())
+                .with_writer(std::io::stderr)
+                .init();
+            warn!(error = %e, "no journal to log to; using stderr");
+        }
     }
 }
 

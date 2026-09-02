@@ -47,7 +47,13 @@ The server starts with the session, so registering it does nothing for the sessi
 from — the tools appear in the next one. That is not a fault to chase.
 
 Then `list_remote_sessions` to see what a host offers, `attach` to mirror one, `detach` to end it.
-Attaching prompts every time, by design.
+Attaching prompts every time, by design. Both take an optional `remote_bin` for a host where cc-link
+is not on the login PATH — which is not the interactive PATH, so check with
+`ssh <host> 'echo $PATH'` before assuming.
+
+Diagnostics go to the journal: `journalctl -t cc-link`, or `-f` while a link is up. The far end logs
+to the journal on its own machine, which is where its problems belong. A host with no journal gets
+stderr instead.
 
 ## Use from a shell
 

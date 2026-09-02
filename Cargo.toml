@@ -30,6 +30,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-journald = "0.3"
 uuid = { version = "1", features = ["v5"] }
 yamux = "0.14"
 

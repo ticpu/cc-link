@@ -33,6 +33,8 @@ const ATTACH_POLL: Duration = Duration::from_millis(200);
 pub struct HostArg {
     /// SSH destination, as ssh would take it.
     pub host: String,
+    /// Path to cc-link on that host, when it is not on the login PATH.
+    pub remote_bin: Option<String>,
 }
 
 /// Host and the session on it to mirror.
@@ -42,6 +44,8 @@ pub struct AttachArg {
     pub host: String,
     /// Session on that host, by name, pid or identifier.
     pub session: String,
+    /// Path to cc-link on that host, when it is not on the login PATH.
+    pub remote_bin: Option<String>,
 }
 
 /// Supervisor holding the links this session has opened.
@@ -74,9 +78,9 @@ impl ControlPlane {
     )]
     pub async fn list_remote_sessions(
         &self,
-        Parameters(HostArg { host }): Parameters<HostArg>,
+        Parameters(HostArg { host, remote_bin }): Parameters<HostArg>,
     ) -> Result<String, ErrorData> {
-        let sessions = remote_sessions(&host)
+        let sessions = remote_sessions(&host, remote_bin.as_deref())
             .await
             .map_err(|e| ErrorData::internal_error(format!("{e:#}"), None))?;
         serde_json::to_string_pretty(&sessions)
@@ -91,9 +95,13 @@ impl ControlPlane {
     )]
     pub async fn attach(
         &self,
-        Parameters(AttachArg { host, session }): Parameters<AttachArg>,
+        Parameters(AttachArg {
+            host,
+            session,
+            remote_bin,
+        }): Parameters<AttachArg>,
     ) -> Result<String, ErrorData> {
-        self.open(&host, &session)
+        self.open(&host, &session, remote_bin.as_deref())
             .await
             .map_err(|e| ErrorData::internal_error(format!("{e:#}"), None))
     }
@@ -106,7 +114,7 @@ impl ControlPlane {
     )]
     pub async fn detach(
         &self,
-        Parameters(HostArg { host }): Parameters<HostArg>,
+        Parameters(HostArg { host, .. }): Parameters<HostArg>,
     ) -> Result<String, ErrorData> {
         self.close(&host)
             .await
@@ -119,7 +127,7 @@ impl ControlPlane {
     ///
     /// The wait is what makes a failed attach visible: the child reports ssh's own error on stderr
     /// and exits, and there is no mirror to find.
-    async fn open(&self, host: &str, session: &str) -> Result<String> {
+    async fn open(&self, host: &str, session: &str, remote_bin: Option<&str>) -> Result<String> {
         let mut links = self
             .links
             .lock()
@@ -132,13 +140,20 @@ impl ControlPlane {
             .pid()
             .ok_or_else(|| anyhow!("the session that spawned cc-link has no pid"))?;
         let exe = std::env::current_exe().context("locating cc-link")?;
-        let mut child = Command::new(exe)
+        let mut command = Command::new(exe);
+        command
             .arg("connect")
             .arg(host)
             .arg("--session")
             .arg(session)
             .arg("--local-session")
-            .arg(pid.to_string())
+            .arg(pid.to_string());
+        if let Some(remote_bin) = remote_bin {
+            command
+                .arg("--remote-bin")
+                .arg(remote_bin);
+        }
+        let mut child = command
             .kill_on_drop(true)
             .spawn()
             .context("starting the relay")?;
@@ -242,11 +257,18 @@ impl ServerHandler for ControlPlane {
 }
 
 /// Ask a host what it could export, without opening a link.
-async fn remote_sessions(host: &str) -> Result<Vec<serde_json::Value>> {
+async fn remote_sessions(host: &str, remote_bin: Option<&str>) -> Result<Vec<serde_json::Value>> {
     let exe = std::env::current_exe().context("locating cc-link")?;
-    let output = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .arg("list")
-        .arg(host)
+        .arg(host);
+    if let Some(remote_bin) = remote_bin {
+        command
+            .arg("--remote-bin")
+            .arg(remote_bin);
+    }
+    let output = command
         .output()
         .await
         .context("starting cc-link list")?;
