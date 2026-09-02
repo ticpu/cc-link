@@ -27,6 +27,19 @@ const SESSION_ID_NAMESPACE: uuid::Uuid = uuid::uuid!("6f9d4a1c-2d3b-4f8e-9a71-0c
 /// Longest `sun_path` a unix socket address can hold, minus the terminator.
 const SUN_PATH_MAX: usize = 103;
 
+/// Bounds a reader applies to an advertised capability list before using it.
+const MAX_FEATURE_LEN: usize = 32;
+/// How many capabilities a reader will take.
+const MAX_FEATURES: usize = 16;
+
+/// Bytes of randomness in a mirrored key file's token.
+const TOKEN_BYTES: usize = 32;
+
+/// Modes Claude Code writes its registry with.
+const SESSIONS_DIR_MODE: u32 = 0o700;
+/// Mode a key file is written with.
+const KEY_FILE_MODE: u32 = 0o600;
+
 /// Fields whose value describes the process behind a record rather than the session it fronts.
 /// A mirrored record takes these from the relay, never from the peer.
 const IDENTITY_FIELDS: &[&str] = &[
@@ -197,14 +210,19 @@ pub fn local_pid_domain() -> Result<String> {
 pub fn proc_start(pid: u32) -> Result<String> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat"))
         .with_context(|| format!("reading /proc/{pid}/stat"))?;
+    parse_proc_start(&stat).with_context(|| format!("parsing /proc/{pid}/stat"))
+}
+
+/// Field 22 of a stat line.
+fn parse_proc_start(stat: &str) -> Result<String> {
     let tail = stat
         .rfind(')')
         .map(|i| &stat[i + 1..])
-        .ok_or_else(|| anyhow!("/proc/{pid}/stat has no comm field"))?;
+        .ok_or_else(|| anyhow!("no comm field"))?;
     tail.split_whitespace()
         .nth(19)
         .map(str::to_owned)
-        .ok_or_else(|| anyhow!("/proc/{pid}/stat is too short to hold a start time"))
+        .ok_or_else(|| anyhow!("too short to hold a start time"))
 }
 
 /// Whether a pid exists.
@@ -525,11 +543,11 @@ fn shared_features(template: &Record, peer: &Record) -> Vec<String> {
         .filter(|f| local.contains(f))
         .filter(|f| {
             !f.is_empty()
-                && f.len() <= 32
+                && f.len() <= MAX_FEATURE_LEN
                 && f.bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
         })
-        .take(16)
+        .take(MAX_FEATURES)
         .collect()
 }
 
@@ -571,7 +589,7 @@ pub fn synth_key(template_key: &Value, local: &LocalIdentity) -> Result<Value> {
 
 /// 32 random bytes, hex encoded.
 fn random_token() -> String {
-    let mut bytes = [0u8; 32];
+    let mut bytes = [0u8; TOKEN_BYTES];
     rand::rng().fill_bytes(&mut bytes);
     hex::encode(bytes)
 }
@@ -596,7 +614,7 @@ pub fn read_key(paths: &Paths, record: &Record) -> Result<Value> {
 pub fn write_record(paths: &Paths, local: &LocalIdentity, record: &Value) -> Result<()> {
     let dir = paths.sessions_dir();
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+    fs::set_permissions(&dir, fs::Permissions::from_mode(SESSIONS_DIR_MODE))
         .with_context(|| format!("setting mode on {}", dir.display()))?;
     let record_path = paths.record_path(local.pid);
     fs::write(&record_path, serde_json::to_vec_pretty(record)?)
@@ -610,7 +628,7 @@ pub fn publish(paths: &Paths, local: &LocalIdentity, record: &Value, key: &Value
     let key_path = paths.key_path(local.pid, &local.socket_path);
     fs::write(&key_path, serde_json::to_vec_pretty(key)?)
         .with_context(|| format!("writing {}", key_path.display()))?;
-    fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+    fs::set_permissions(&key_path, fs::Permissions::from_mode(KEY_FILE_MODE))
         .with_context(|| format!("setting mode on {}", key_path.display()))?;
     Ok(())
 }
@@ -834,15 +852,7 @@ mod tests {
     #[test]
     fn a_start_time_survives_a_process_name_containing_a_paren() {
         let stat = "42 (weird ) name) S 1 42 42 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0";
-        let tail = &stat[stat
-            .rfind(')')
-            .unwrap()
-            + 1..];
-        assert_eq!(
-            tail.split_whitespace()
-                .nth(19),
-            Some("987654")
-        );
+        assert_eq!(parse_proc_start(stat).unwrap(), "987654");
     }
 
     #[test]
