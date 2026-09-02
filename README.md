@@ -43,6 +43,9 @@ starts a cc-link process, so user-global is rarely the right place:
 }
 ```
 
+The server starts with the session, so registering it does nothing for the session you register it
+from — the tools appear in the next one. That is not a fault to chase.
+
 Then `list_remote_sessions` to see what a host offers, `attach` to mirror one, `detach` to end it.
 Attaching prompts every time, by design.
 

@@ -411,6 +411,29 @@ pub struct LocalIdentity {
     pub clock_offset_ms: i64,
 }
 
+/// Fields the peer's build writes that this one has no place for.
+///
+/// Fields that describe identity are not among them however the two builds differ: the mirror
+/// replaces those with the relay's own, so nothing about the remote session is lost by not carrying
+/// them. Reporting those would be reporting the overlay working as designed.
+pub fn unknown_peer_fields(template: &Record, peer: &Record) -> Vec<String> {
+    let (Some(template_obj), Some(peer_obj)) = (
+        template
+            .0
+            .as_object(),
+        peer.0
+            .as_object(),
+    ) else {
+        return Vec::new();
+    };
+    peer_obj
+        .keys()
+        .filter(|k| !template_obj.contains_key(*k))
+        .filter(|k| !IDENTITY_FIELDS.contains(&k.as_str()))
+        .cloned()
+        .collect()
+}
+
 /// Build the record a relay publishes for a remote session.
 ///
 /// The template is a live local record, so the document keeps whatever shape this build of Claude
@@ -426,15 +449,6 @@ pub fn synth_record(template: &Record, peer: &Record, local: &LocalIdentity) -> 
         .0
         .as_object()
         .ok_or_else(|| anyhow!("peer record is not an object"))?;
-
-    let dropped: Vec<&str> = peer_obj
-        .keys()
-        .filter(|k| !template_obj.contains_key(*k))
-        .map(String::as_str)
-        .collect();
-    if !dropped.is_empty() {
-        warn!(fields = ?dropped, "peer record carries fields this build does not write; dropping");
-    }
 
     let mut out = Map::new();
     for (key, template_value) in template_obj {
@@ -807,6 +821,22 @@ mod tests {
         assert!(out
             .get("fieldFromAnotherBuild")
             .is_none());
+    }
+
+    #[test]
+    fn only_a_field_that_carries_something_is_worth_reporting() {
+        let mut older = template();
+        older
+            .0
+            .as_object_mut()
+            .unwrap()
+            .remove("pidDomain");
+        // The peer's domain is replaced by ours however the builds differ, so not carrying it
+        // loses nothing and reporting it would be reporting the overlay working.
+        assert_eq!(
+            unknown_peer_fields(&older, &peer()),
+            vec!["fieldFromAnotherBuild".to_string()]
+        );
     }
 
     #[test]

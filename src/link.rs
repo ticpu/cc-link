@@ -281,6 +281,15 @@ impl Link {
                 }),
             clock_offset_ms: agreement.clock_offset_ms,
         };
+        // Said once for the life of the link: the mirror is rebuilt on every status change and on
+        // every heartbeat, and a line repeated per read is a log nobody reads.
+        let unknown = registry::unknown_peer_fields(&export, &agreement.remote_export);
+        if !unknown.is_empty() {
+            warn!(
+                fields = ?unknown,
+                "the remote build writes fields this one has no place for; they are not mirrored"
+            );
+        }
         // The exported session is itself a live local record, so it is the template: the mirror
         // then has whatever shape this build of Claude Code writes, with no field list to keep.
         let record = registry::synth_record(&export, &agreement.remote_export, &identity)?;
