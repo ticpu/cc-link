@@ -271,6 +271,14 @@ impl Link {
             pid_domain: registry::local_pid_domain()?,
             socket_path: paths.socket_path(pid),
             host,
+            exports: export
+                .name()
+                .unwrap_or_else(|| {
+                    export
+                        .pid()
+                        .unwrap_or_default()
+                        .to_string()
+                }),
             clock_offset_ms: agreement.clock_offset_ms,
         };
         // The exported session is itself a live local record, so it is the template: the mirror

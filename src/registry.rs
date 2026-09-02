@@ -20,6 +20,11 @@ use tracing::{debug, warn};
 pub const STUB_MARKER: &str = "ccLinkStub";
 /// Remote host a mirrored record was published for.
 pub const STUB_HOST: &str = "ccLinkHost";
+/// Local session the link exports in return.
+///
+/// Without it two links to one host are indistinguishable on disk, and ending one would mean
+/// ending a link another session opened.
+pub const STUB_EXPORTS: &str = "ccLinkExports";
 
 /// Namespace for the synthetic identifier a mirrored session is given.
 const SESSION_ID_NAMESPACE: uuid::Uuid = uuid::uuid!("6f9d4a1c-2d3b-4f8e-9a71-0c5d8e2b7a44");
@@ -400,6 +405,8 @@ pub struct LocalIdentity {
     pub socket_path: PathBuf,
     /// Host the mirrored session lives on, used to prefix its name.
     pub host: String,
+    /// Name of the local session this link exports in return.
+    pub exports: String,
     /// Milliseconds to add to the peer's timestamps to express them on this clock.
     pub clock_offset_ms: i64,
 }
@@ -482,6 +489,13 @@ pub fn synth_record(template: &Record, peer: &Record, local: &LocalIdentity) -> 
         ),
     );
     out.insert(STUB_MARKER.into(), Value::Bool(true));
+    out.insert(
+        STUB_EXPORTS.into(),
+        local
+            .exports
+            .clone()
+            .into(),
+    );
     out.insert(
         STUB_HOST.into(),
         local
@@ -762,6 +776,7 @@ mod tests {
             pid_domain: "linux:local:pid:[1]".into(),
             socket_path: PathBuf::from("/run/user/1000/cc-socks/333.sock"),
             host: "p4".into(),
+            exports: "claude-code-aa".into(),
             clock_offset_ms: 0,
         }
     }
@@ -783,6 +798,7 @@ mod tests {
         assert_eq!(out["name"], "p4~claude-code-zz");
         assert_eq!(out[STUB_MARKER], true);
         assert_eq!(out[STUB_HOST], "p4");
+        assert_eq!(out[STUB_EXPORTS], "claude-code-aa");
     }
 
     #[test]

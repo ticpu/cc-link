@@ -15,7 +15,7 @@ use tokio::io::join;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use crate::registry::Paths;
+use crate::registry::{Paths, Record};
 
 #[derive(Parser)]
 #[command(
@@ -65,11 +65,16 @@ enum Command {
     },
     /// The far end of a link. Speaks the protocol on stdio and is not run by hand.
     Serve,
-    /// End a link, withdrawing the mirrored session. Also clears mirrors left by a relay that is
-    /// no longer running.
+    /// End a link, withdrawing the mirrored session.
     Down {
-        /// Only mirrors of this host.
+        /// Only links to this host.
         host: Option<String>,
+        /// Only the link mirroring this remote session, prefixed or not.
+        #[arg(long)]
+        session: Option<String>,
+        /// Only the link exporting this local session.
+        #[arg(long)]
+        local_session: Option<String>,
     },
     /// Control plane: an MCP server that attaches and detaches links for the session that spawned
     /// it.
@@ -113,7 +118,11 @@ async fn main() -> Result<()> {
             transport_command,
         } => list(host, remote_bin, ssh_option, transport_command).await,
         Command::Serve => serve().await,
-        Command::Down { host } => down(host),
+        Command::Down {
+            host,
+            session,
+            local_session,
+        } => down(host, session, local_session),
         Command::Mcp => mcp::run().await,
     }
 }
@@ -173,40 +182,107 @@ async fn serve() -> Result<()> {
         .await
 }
 
-/// Remove mirrors whose relay is gone, or end the ones still running.
-fn down(host: Option<String>) -> Result<()> {
+/// End links, one at a time.
+///
+/// A machine can hold several links to one host — one per session that opened one — and they are
+/// only told apart by what each exports. Ending more than the caller meant to would take away a
+/// peer another session is still talking to, so several matches with no selector is a refusal, not
+/// a broadcast.
+fn down(
+    host: Option<String>,
+    session: Option<String>,
+    local_session: Option<String>,
+) -> Result<()> {
     let paths = Paths::from_env()?;
-    let mut matched = 0;
-    for record in registry::list_live(&paths)? {
-        if !record.is_stub() {
-            continue;
+    let matches: Vec<Mirror> = registry::list_live(&paths)?
+        .into_iter()
+        .filter(Record::is_stub)
+        .map(Mirror::from)
+        .filter(|m| {
+            host.as_ref()
+                .is_none_or(|h| &m.host == h)
+        })
+        .filter(|m| {
+            session
+                .as_ref()
+                .is_none_or(|s| m.matches_mirror(s))
+        })
+        .filter(|m| {
+            local_session
+                .as_ref()
+                .is_none_or(|s| &m.exports == s)
+        })
+        .collect();
+
+    match matches.as_slice() {
+        [] => bail!("no link matches"),
+        [one] => {
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(one.pid as i32),
+                nix::sys::signal::Signal::SIGTERM,
+            )
+            .with_context(|| format!("signalling the relay for {} (pid {})", one.name, one.pid))?;
+            info!(
+                name = one.name,
+                pid = one.pid,
+                "asked a relay to end its link"
+            );
+            Ok(())
         }
-        let recorded_host = record
-            .0
-            .get(registry::STUB_HOST)
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_owned();
-        if let Some(host) = &host {
-            if &recorded_host != host {
-                continue;
-            }
+        several => {
+            let listed: Vec<String> = several
+                .iter()
+                .map(|m| format!("{} (exports {})", m.name, m.exports))
+                .collect();
+            bail!(
+                "{} links match; name one with --session or --local-session: {}",
+                several.len(),
+                listed.join(", ")
+            )
         }
-        let pid = record
-            .pid()
-            .context("mirror has no pid")?;
-        nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid as i32),
-            nix::sys::signal::Signal::SIGTERM,
-        )
-        .with_context(|| format!("signalling the relay for {recorded_host} (pid {pid})"))?;
-        info!(host = recorded_host, pid, "asked a relay to end its link");
-        matched += 1;
     }
-    if matched == 0 {
-        bail!("no mirrored session matches");
+}
+
+/// A published mirror, reduced to what picking one needs.
+struct Mirror {
+    pid: u32,
+    name: String,
+    host: String,
+    exports: String,
+}
+
+impl Mirror {
+    /// Whether a selector names this mirrored session, prefixed or not.
+    fn matches_mirror(&self, selector: &str) -> bool {
+        self.name == selector
+            || self
+                .name
+                .strip_prefix(&format!("{}~", self.host))
+                == Some(selector)
     }
-    Ok(())
+}
+
+impl From<Record> for Mirror {
+    fn from(record: Record) -> Self {
+        let field = |key: &str| {
+            record
+                .0
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        Self {
+            pid: record
+                .pid()
+                .unwrap_or_default(),
+            name: record
+                .name()
+                .unwrap_or_default(),
+            host: field(registry::STUB_HOST),
+            exports: field(registry::STUB_EXPORTS),
+        }
+    }
 }
 
 /// Start whichever process carries the link.
@@ -238,4 +314,26 @@ fn child_io(
         .take()
         .context("the far end has no stdin")?;
     Ok(join(stdout, stdin))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mirror() -> Mirror {
+        Mirror {
+            pid: 42,
+            name: "p4~claude-code-9b".into(),
+            host: "p4".into(),
+            exports: "cc-link-bridge".into(),
+        }
+    }
+
+    #[test]
+    fn a_mirrored_session_answers_to_its_name_with_or_without_the_host() {
+        assert!(mirror().matches_mirror("p4~claude-code-9b"));
+        assert!(mirror().matches_mirror("claude-code-9b"));
+        assert!(!mirror().matches_mirror("claude-code-9e"));
+        assert!(!mirror().matches_mirror("p4~"));
+    }
 }
