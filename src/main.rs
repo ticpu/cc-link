@@ -11,6 +11,8 @@ mod registry;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use std::io::IsTerminal;
+
 use tokio::io::join;
 use tracing::{info, warn};
 use tracing_subscriber::layer::SubscriberExt;
@@ -146,6 +148,9 @@ fn init_logging() {
             tracing_subscriber::fmt()
                 .with_env_filter(filter())
                 .with_writer(std::io::stderr)
+                // Under `serve` this stderr is a pipe back to the client, and under `mcp` it is a
+                // log the harness collects; colour codes in either are noise a reader has to strip.
+                .with_ansi(std::io::stderr().is_terminal())
                 .init();
             warn!(error = %e, "no journal to log to; using stderr");
         }
