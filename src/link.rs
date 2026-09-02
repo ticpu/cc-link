@@ -21,6 +21,9 @@ const HEARTBEAT: Duration = Duration::from_secs(3600);
 /// How long to let the registry settle before reading a record that just changed.
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 
+/// How long the far end waits for a client to read a session list before giving up on it.
+const LIST_DRAIN: Duration = Duration::from_secs(10);
+
 /// One end of a link, once both sides have agreed to it.
 pub struct Link {
     paths: Paths,
@@ -138,6 +141,10 @@ pub async fn server_handshake(mux: &mut Mux, paths: &Paths) -> Result<Option<(Ag
                 .map(|r| r.0)
                 .collect();
             mux::send(&mut control, &Control::Sessions { sessions }).await?;
+            // Exiting here would drop the multiplexer with the reply still in it: the frame is
+            // written to the stream, not to the pipe, and nothing else would ever flush it. Wait
+            // for the client to read and close.
+            let _ = tokio::time::timeout(LIST_DRAIN, drain(&mut control)).await;
             Ok(None)
         }
         Intent::Attach { session } => {
@@ -207,6 +214,13 @@ fn acceptable(protocol: u32, platform: &str, pid_domain: &str, home: &str) -> Re
             "both ends are the same machine and account, so they share one registry".into(),
         );
     }
+    Ok(())
+}
+
+/// Read a stream until the other end closes it.
+async fn drain(stream: &mut Stream) -> Result<()> {
+    let mut sink = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(stream, &mut sink).await?;
     Ok(())
 }
 
