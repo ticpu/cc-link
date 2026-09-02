@@ -144,7 +144,11 @@ async fn run(command: Command) -> Result<()> {
 /// Structured fields are the reason this is a journal and not a file — an event carrying a field
 /// list stays queryable by value rather than by substring.
 fn init_logging() {
-    let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // The MCP library narrates its own lifecycle at info, several lines per session start, which
+    // buries the events a reader came for. Ours stay at info; its own are worth seeing only when
+    // something is wrong.
+    let filter =
+        || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,rmcp=warn"));
     match tracing_journald::layer() {
         Ok(journal) => {
             tracing_subscriber::registry()
