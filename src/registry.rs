@@ -644,9 +644,20 @@ pub fn write_record(paths: &Paths, local: &LocalIdentity, record: &Value) -> Res
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     fs::set_permissions(&dir, fs::Permissions::from_mode(SESSIONS_DIR_MODE))
         .with_context(|| format!("setting mode on {}", dir.display()))?;
-    let record_path = paths.record_path(local.pid);
-    fs::write(&record_path, serde_json::to_vec_pretty(record)?)
-        .with_context(|| format!("writing {}", record_path.display()))
+    write_atomically(
+        &paths.record_path(local.pid),
+        &serde_json::to_vec_pretty(record)?,
+    )
+}
+
+/// Replace a file rather than rewrite it in place.
+///
+/// A mirror is rewritten on every status change while discovery is reading it, and a reader that
+/// catches a half-written record treats the session as unparsable rather than waiting for the rest.
+fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
+    let temporary = path.with_extension("json.new");
+    fs::write(&temporary, contents).with_context(|| format!("writing {}", temporary.display()))?;
+    fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))
 }
 
 /// Write a mirrored record and its key file.
@@ -714,8 +725,7 @@ pub fn touch_activity(paths: &Paths, local: &LocalIdentity) -> Result<()> {
         .as_object_mut()
         .ok_or_else(|| anyhow!("{} is not an object", path.display()))?;
     obj.insert("updatedAt".into(), now_ms().into());
-    fs::write(&path, serde_json::to_vec_pretty(&value)?)
-        .with_context(|| format!("writing {}", path.display()))
+    write_atomically(&path, &serde_json::to_vec_pretty(&value)?)
 }
 
 /// Confirm the session a relay fronts is still the one it was pointed at.
