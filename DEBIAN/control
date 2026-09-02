@@ -1,0 +1,12 @@
+Package: cc-link
+Version: 0.0.0-replaced-by-makefile
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: replaced-by-makefile
+Maintainer: Jérôme Poulin <jeromepoulin@gmail.com>
+Description: Bridge Claude Code cross-session messaging across machines
+ Relays Claude Code's cross-session messaging between two machines over a
+ single SSH stdio channel, publishing a mirror of the remote session into
+ the local registry so it appears as an ordinary local peer. Includes an
+ MCP server for attaching and detaching links.

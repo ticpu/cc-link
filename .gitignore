@@ -1,0 +1,20 @@
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Binary output
+/dist/
+
+# Debian packaging
+*.deb
+package.tmp
+
+# Scratch
+/scratch/
