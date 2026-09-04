@@ -42,10 +42,13 @@ there is nothing to bump anywhere but `Cargo.toml`.
 cc-link mcp install [--scope local|user|project]
 ```
 
-registers the binary with Claude Code. Pick the scope where linking is actually wanted — every
-session in it starts a cc-link process, so user-wide is rarely the right place. A binary that is on
-the PATH registers under its bare name, so a later reinstall to a different prefix still resolves;
-one that is not registers by absolute path.
+registers the binary with Claude Code, for every project by default, because a session that cannot
+reach another machine is one you have to restart to fix. The cost is a cc-link process per session:
+an idle supervisor connects to nothing and publishes nothing until a link is asked for. Narrow it
+with `--scope local` or `--scope project` if that is not the trade you want.
+
+A binary that is on the PATH registers under its bare name, so a later reinstall to a different
+prefix still resolves; one that is not registers by absolute path.
 
 The server starts with the session, so registering it does nothing for the session you register it
 from — the tools appear in the next one. That is not a fault to chase.

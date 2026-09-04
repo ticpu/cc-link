@@ -95,8 +95,8 @@ enum Command {
 enum McpAction {
     /// Register this binary as an MCP server with Claude Code.
     Install {
-        /// Where the registration lives: this project, every project, or shared in the repository.
-        #[arg(long, default_value = "local")]
+        /// Where the registration lives: every project, this project, or shared in the repository.
+        #[arg(long, default_value = "user")]
         scope: String,
         /// Name the tools appear under.
         #[arg(long, default_value = "cc-link")]
