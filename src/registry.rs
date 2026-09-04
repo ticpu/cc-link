@@ -557,7 +557,54 @@ fn mirrored_name(peer: &Record, host: &str) -> String {
     let name = peer
         .name()
         .unwrap_or_else(|| "unnamed".into());
-    format!("{host}~{name}")
+    format!("{}~{name}", host_label(host))
+}
+
+/// The part of an SSH destination fit to appear in a name.
+///
+/// A destination is whatever ssh accepts — a user, a port, a scheme — and a name is an address a
+/// person types. An `@` in it is the worst of these: it is address syntax where the name is used,
+/// so a mirror carrying one cannot be addressed at all, by anyone, ever.
+pub fn host_label(host: &str) -> String {
+    let destination = host
+        .rsplit('@')
+        .next()
+        .unwrap_or(host)
+        .trim_end_matches('/');
+    // A colon separates a port, except in an address that is made of them: bracketed, or bare with
+    // more than one.
+    let label = match destination.strip_prefix('[') {
+        Some(bracketed) => bracketed
+            .split(']')
+            .next()
+            .unwrap_or(bracketed),
+        None if destination
+            .matches(':')
+            .count()
+            > 1 =>
+        {
+            destination
+        }
+        None => destination
+            .split(':')
+            .next()
+            .unwrap_or(destination),
+    };
+    let label: String = label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if label.is_empty() {
+        "peer".into()
+    } else {
+        label
+    }
 }
 
 /// Capabilities both ends can serve, sanitized to what a reader will accept.
@@ -831,6 +878,26 @@ mod tests {
         assert!(out
             .get("fieldFromAnotherBuild")
             .is_none());
+    }
+
+    #[test]
+    fn a_name_never_carries_what_addressing_uses() {
+        // An `@` reaches the name from an ordinary ssh destination and makes the mirror
+        // unaddressable, which is the one failure a display prefix must not cause.
+        assert_eq!(host_label("jerome.poulin@localhost"), "localhost");
+        assert_eq!(host_label("ssh://user@build-host:2222"), "build-host");
+        assert_eq!(host_label("p4"), "p4");
+        assert_eq!(host_label("[2001:db8::1]:2222"), "2001-db8--1");
+        assert_eq!(host_label("2001:db8::1"), "2001-db8--1");
+        assert_eq!(host_label("@"), "peer");
+    }
+
+    #[test]
+    fn a_mirrored_name_is_prefixed_with_the_host_alone() {
+        let mut local = identity();
+        local.host = "jerome.poulin@localhost".into();
+        let out = synth_record(&template(), &peer(), &local).unwrap();
+        assert_eq!(out["name"], "localhost~claude-code-zz");
     }
 
     #[test]

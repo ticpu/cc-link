@@ -371,7 +371,7 @@ impl Mirror {
         self.name == selector
             || self
                 .name
-                .strip_prefix(&format!("{}~", self.host))
+                .strip_prefix(&format!("{}~", registry::host_label(&self.host)))
                 == Some(selector)
     }
 }
