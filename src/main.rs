@@ -91,13 +91,35 @@ enum Command {
     },
 }
 
+/// Reach of a registration, as Claude Code understands it.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum Scope {
+    /// Every project this account opens.
+    User,
+    /// This project, for this account only.
+    Local,
+    /// This project, shared with whoever clones it.
+    Project,
+}
+
+impl Scope {
+    /// What the harness's CLI calls it.
+    fn as_arg(self) -> &'static str {
+        match self {
+            Scope::User => "user",
+            Scope::Local => "local",
+            Scope::Project => "project",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum McpAction {
     /// Register this binary as an MCP server with Claude Code.
     Install {
-        /// Where the registration lives: every project, this project, or shared in the repository.
-        #[arg(long, default_value = "user")]
-        scope: String,
+        /// Where the registration lives.
+        #[arg(long, value_enum, default_value_t = Scope::User)]
+        scope: Scope,
         /// Name the tools appear under.
         #[arg(long, default_value = "cc-link")]
         name: String,
@@ -153,7 +175,7 @@ async fn run(command: Command) -> Result<()> {
         Command::Mcp { action: None } => mcp::run().await,
         Command::Mcp {
             action: Some(McpAction::Install { scope, name }),
-        } => install(&scope, &name),
+        } => install(scope, &name),
     }
 }
 
@@ -197,7 +219,7 @@ fn init_logging() {
 ///
 /// The registration is written by Claude Code's own CLI rather than by editing its config: the file
 /// and its shape are the harness's, and a scope means whatever that build says it means.
-fn install(scope: &str, name: &str) -> Result<()> {
+fn install(scope: Scope, name: &str) -> Result<()> {
     let exe = std::env::current_exe().context("locating cc-link")?;
     // A bare name survives a reinstall to a different prefix; an absolute path is for a binary that
     // is not on the PATH the harness will run it with.
@@ -212,7 +234,7 @@ fn install(scope: &str, name: &str) -> Result<()> {
         .arg("add")
         .arg(name)
         .arg("--scope")
-        .arg(scope)
+        .arg(scope.as_arg())
         .arg("--")
         .arg(&command)
         .arg("mcp")
@@ -223,7 +245,9 @@ fn install(scope: &str, name: &str) -> Result<()> {
     }
     info!(
         name,
-        scope, command, "registered; the tools appear in the next session, not this one"
+        scope = scope.as_arg(),
+        command,
+        "registered; the tools appear in the next session, not this one"
     );
     Ok(())
 }
