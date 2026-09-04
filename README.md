@@ -38,16 +38,14 @@ there is nothing to bump anywhere but `Cargo.toml`.
 
 ## Use from a session
 
-Register the MCP server in the scope where linking is actually wanted — every session in that scope
-starts a cc-link process, so user-global is rarely the right place:
-
-```json
-{
-  "mcpServers": {
-    "cc-link": { "command": "cc-link", "args": ["mcp"] }
-  }
-}
 ```
+cc-link mcp install [--scope local|user|project]
+```
+
+registers the binary with Claude Code. Pick the scope where linking is actually wanted — every
+session in it starts a cc-link process, so user-wide is rarely the right place. A binary that is on
+the PATH registers under its bare name, so a later reinstall to a different prefix still resolves;
+one that is not registers by absolute path.
 
 The server starts with the session, so registering it does nothing for the session you register it
 from — the tools appear in the next one. That is not a fault to chase.

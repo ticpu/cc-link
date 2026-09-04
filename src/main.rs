@@ -21,6 +21,9 @@ use tracing_subscriber::EnvFilter;
 
 use crate::registry::{Paths, Record};
 
+/// Name this binary is installed under.
+const BINARY: &str = "cc-link";
+
 #[derive(Parser)]
 #[command(
     version,
@@ -81,8 +84,24 @@ enum Command {
         local_session: Option<String>,
     },
     /// Control plane: an MCP server that attaches and detaches links for the session that spawned
-    /// it.
-    Mcp,
+    /// it. With no subcommand, this is the server itself, spoken on stdio.
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// Register this binary as an MCP server with Claude Code.
+    Install {
+        /// Where the registration lives: this project, every project, or shared in the repository.
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Name the tools appear under.
+        #[arg(long, default_value = "cc-link")]
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -131,7 +150,10 @@ async fn run(command: Command) -> Result<()> {
             session,
             local_session,
         } => down(host, session, local_session),
-        Command::Mcp => mcp::run().await,
+        Command::Mcp { action: None } => mcp::run().await,
+        Command::Mcp {
+            action: Some(McpAction::Install { scope, name }),
+        } => install(&scope, &name),
     }
 }
 
@@ -169,6 +191,54 @@ fn init_logging() {
             warn!(error = %e, "no journal to log to; using stderr");
         }
     }
+}
+
+/// Register this binary with Claude Code as an MCP server.
+///
+/// The registration is written by Claude Code's own CLI rather than by editing its config: the file
+/// and its shape are the harness's, and a scope means whatever that build says it means.
+fn install(scope: &str, name: &str) -> Result<()> {
+    let exe = std::env::current_exe().context("locating cc-link")?;
+    // A bare name survives a reinstall to a different prefix; an absolute path is for a binary that
+    // is not on the PATH the harness will run it with.
+    let command = match which(BINARY) {
+        Some(found) if found == exe => BINARY.to_owned(),
+        _ => exe
+            .to_string_lossy()
+            .into_owned(),
+    };
+    let status = std::process::Command::new("claude")
+        .arg("mcp")
+        .arg("add")
+        .arg(name)
+        .arg("--scope")
+        .arg(scope)
+        .arg("--")
+        .arg(&command)
+        .arg("mcp")
+        .status()
+        .context("running claude mcp add; Claude Code's CLI has to be on the PATH")?;
+    if !status.success() {
+        bail!("claude mcp add exited with {status}");
+    }
+    info!(
+        name,
+        scope, command, "registered; the tools appear in the next session, not this one"
+    );
+    Ok(())
+}
+
+/// Where a name resolves on the PATH, if it does.
+fn which(name: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH")?
+        .to_string_lossy()
+        .split(':')
+        .map(|dir| std::path::Path::new(dir).join(name))
+        .find(|path| path.is_file())
+        .and_then(|path| {
+            path.canonicalize()
+                .ok()
+        })
 }
 
 /// Start the far end and hold the link open.
